@@ -1,0 +1,501 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Map PDF Maker</title>
+<meta name="description" content="Turn JPG/PNG maps into print-ready A4/A3 PDFs with an optional grid. Runs entirely in your browser.">
+<style>
+  :root {
+    --bg: #2b2d31; --panel: #313338; --row: #383a40; --row-sel: #4e5d94;
+    --text: #f2f3f5; --sub: #b5bac1; --accent: #5865f2; --a3: #e67e22;
+    --green: #248046; --grey: #4e5058; --canvas: #1e1f22;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.4 "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+    min-height: 100vh; display: flex; flex-direction: column;
+  }
+  header.bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px; }
+  .spacer { flex: 1; }
+  button {
+    font: inherit; font-weight: 700; color: #fff; background: var(--accent);
+    border: 0; border-radius: 4px; padding: 8px 16px; cursor: pointer;
+  }
+  button:hover { filter: brightness(1.1); }
+  button:disabled { opacity: .5; cursor: default; }
+  button.grey { background: var(--grey); }
+  button.green { background: var(--green); }
+  #status { color: var(--sub); font-size: 13px; }
+  progress { width: 160px; height: 10px; accent-color: var(--accent); }
+  main { flex: 1; display: flex; gap: 12px; padding: 0 12px 12px; min-height: 0; }
+  .panel { background: var(--panel); border-radius: 6px; }
+  #left { width: 400px; max-width: 45vw; display: flex; flex-direction: column; }
+  #right { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .head { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px 4px; }
+  .head h2 { margin: 0; font-size: 16px; }
+  #defaultsToggle { background: none; color: var(--sub); padding: 2px 4px; font-size: 13px; }
+  #defaultsPanel { background: var(--row); margin: 0 8px 6px; padding: 8px 10px; border-radius: 4px; display: none; }
+  #defaultsPanel.open { display: block; }
+  #defaultsPanel small { color: var(--sub); display: block; margin-bottom: 6px; }
+  .ctl { display: grid; grid-template-columns: 64px 1fr 64px; align-items: center; gap: 8px; margin: 4px 0; font-weight: 700; }
+  .ctl input[type=range] { width: 100%; accent-color: var(--accent); }
+  .ctl .val { font-weight: 400; }
+  #list { flex: 1; overflow-y: auto; padding: 4px; min-height: 120px; }
+  #empty { color: var(--sub); text-align: center; padding: 40px 12px; }
+  #list.drag { outline: 2px dashed var(--accent); outline-offset: -6px; }
+  .row {
+    display: flex; align-items: center; gap: 8px; background: var(--row);
+    border-radius: 4px; padding: 4px 8px 4px 6px; margin: 3px 4px; cursor: pointer;
+  }
+  .row.sel { background: var(--row-sel); }
+  .row img { width: 56px; height: 56px; object-fit: contain; flex: none; }
+  .row .txt { flex: 1; min-width: 0; }
+  .row .nm { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .dm { color: var(--sub); font-size: 12px; }
+  .rm { background: none; color: var(--sub); padding: 2px 6px; font-size: 16px; }
+  .switch {
+    position: relative; width: 84px; height: 28px; border-radius: 14px; flex: none;
+    background: var(--accent); padding: 0; color: #fff; font-size: 13px;
+  }
+  .switch.a3 { background: var(--a3); }
+  .switch .knob { position: absolute; top: 2px; left: 2px; width: 24px; height: 24px; border-radius: 50%; background: #fff; transition: left .15s; }
+  .switch.a3 .knob { left: 58px; }
+  .switch .lbl { position: absolute; top: 0; line-height: 28px; right: 12px; }
+  .switch.a3 .lbl { right: auto; left: 12px; }
+  #titleLabel { padding: 10px 12px 0; font-size: 16px; font-weight: 700; word-break: break-all; }
+  #info { padding: 0 12px; color: var(--sub); font-size: 13px; min-height: 20px; }
+  #previewWrap { flex: 1; min-height: 280px; margin: 8px 12px; background: var(--canvas); position: relative; }
+  #preview { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #gridBar { padding: 0 12px 10px; }
+  #gridBar .ctl { grid-template-columns: 70px 1fr 190px; }
+  #gridBar label { display: flex; align-items: center; gap: 6px; }
+  footer { text-align: center; color: var(--sub); font-size: 12px; padding: 0 0 10px; }
+  @media (max-width: 800px) {
+    main { flex-direction: column; }
+    #left { width: 100%; max-width: none; }
+    #list { max-height: 260px; }
+    #gridBar .ctl { grid-template-columns: 70px 1fr 70px; }
+    #gridBar .ctl .val { font-size: 12px; }
+  }
+</style>
+</head>
+<body>
+<header class="bar">
+  <button id="addBtn">+&nbsp; Add maps...</button>
+  <button id="clearBtn" class="grey">Clear all</button>
+  <input id="file" type="file" accept="image/jpeg,image/png,image/webp,image/bmp" multiple hidden>
+  <span class="spacer"></span>
+  <span id="status"></span>
+  <progress id="progress" value="0" max="1" hidden></progress>
+  <button id="exportBtn" class="green">Export all to PDF</button>
+</header>
+
+<main>
+  <section id="left" class="panel">
+    <div class="head">
+      <h2>Maps</h2>
+      <button id="defaultsToggle">⚙ Defaults ▾</button>
+    </div>
+    <div id="defaultsPanel">
+      <small>Defaults for new maps (remembered in this browser)</small>
+      <div class="ctl"><span>Paper</span>
+        <span><button class="switch" id="defSize" type="button"><span class="knob"></span><span class="lbl"></span></button></span><span></span></div>
+      <div class="ctl"><span>Grid</span>
+        <label><input type="checkbox" id="defGridOn"> Grid on</label><span></span></div>
+      <div class="ctl"><span>Size</span><input type="range" id="defGridMm"><span class="val" id="defGridMmVal"></span></div>
+      <div class="ctl"><span>Opacity</span><input type="range" id="defOpacity"><span class="val" id="defOpacityVal"></span></div>
+    </div>
+    <div id="list"><div id="empty">No maps yet.<br>Click “+ Add maps...” or drop images here.</div></div>
+  </section>
+
+  <section id="right" class="panel">
+    <div id="titleLabel">Preview</div>
+    <div id="info">Click a map in the list to preview it.</div>
+    <div id="previewWrap"><canvas id="preview"></canvas></div>
+    <div id="gridBar">
+      <div class="ctl"><label><input type="checkbox" id="gridOn"> Grid</label>
+        <input type="range" id="gridMm"><span class="val" id="gridMmVal"></span></div>
+      <div class="ctl"><span>Opacity</span>
+        <input type="range" id="gridOpacity"><span class="val" id="gridOpacityVal"></span></div>
+    </div>
+  </section>
+</main>
+<footer>Everything runs in your browser. Your images are never uploaded.</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script>
+"use strict";
+// ---------------------------------------------------------------- settings
+const PAGE_SIZES_MM = { A4: [210, 297], A3: [297, 420] }; // portrait (w, h)
+const MARGIN_MM = 6;            // safe zone so printers don't cut the map off
+const GRID_LINE_MM = 0.3;
+const GRID_MIN = 5, GRID_MAX = 50, GRID_DEFAULT = 25;
+const OPACITY_MIN = 10, OPACITY_DEFAULT = 100;
+const LOW_DPI_WARNING = 150;
+const STORAGE_KEY = "mapPdfMakerSettings";
+const DEFAULTS = { size: "A4", grid_on: false, grid_mm: GRID_DEFAULT, grid_opacity: OPACITY_DEFAULT };
+
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+const $ = id => document.getElementById(id);
+
+function loadSettings() {
+  const s = { ...DEFAULTS };
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
+    if (saved && typeof saved === "object") {
+      if (saved.size in PAGE_SIZES_MM) s.size = saved.size;
+      if (typeof saved.grid_on === "boolean") s.grid_on = saved.grid_on;
+      if (Number.isInteger(saved.grid_mm)) s.grid_mm = clamp(saved.grid_mm, GRID_MIN, GRID_MAX);
+      if (Number.isInteger(saved.grid_opacity)) s.grid_opacity = clamp(saved.grid_opacity, OPACITY_MIN, 100);
+    }
+  } catch (e) { /* storage blocked or corrupt: use defaults */ }
+  return s;
+}
+function saveSettings() {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(defaults)); } catch (e) {}
+}
+
+// ---------------------------------------------------------------- model
+let defaults = loadSettings();
+const items = [];
+let selected = null;
+
+async function makeItem(file) {
+  const bmp = await createImageBitmap(file); // applies EXIF orientation
+  const item = {
+    file, bmp, name: file.name.replace(/\.[^.]+$/, ""),
+    pxW: bmp.width, pxH: bmp.height,
+    size: defaults.size, grid_on: defaults.grid_on,
+    grid_mm: defaults.grid_mm, grid_opacity: defaults.grid_opacity,
+  };
+  item.thumbUrl = scaledCanvas(bmp, 112).toDataURL("image/jpeg", 0.8);
+  return item;
+}
+
+// Draws bitmap on white (flattens transparency), fitted within maxSide.
+function scaledCanvas(bmp, maxSide) {
+  const k = maxSide ? Math.min(1, maxSide / Math.max(bmp.width, bmp.height)) : 1;
+  const c = document.createElement("canvas");
+  c.width = Math.max(1, Math.round(bmp.width * k));
+  c.height = Math.max(1, Math.round(bmp.height * k));
+  const g = c.getContext("2d");
+  g.fillStyle = "#fff";
+  g.fillRect(0, 0, c.width, c.height);
+  g.drawImage(bmp, 0, 0, c.width, c.height);
+  return c;
+}
+
+// Page size and map rectangle in mm (origin top-left).
+function layout(item) {
+  let [pw, ph] = PAGE_SIZES_MM[item.size];
+  if (item.pxW > item.pxH) [pw, ph] = [ph, pw]; // wide image -> landscape page
+  const aw = pw - 2 * MARGIN_MM, ah = ph - 2 * MARGIN_MM;
+  const scale = Math.min(aw / item.pxW, ah / item.pxH);
+  const w = item.pxW * scale, h = item.pxH * scale;
+  return { pw, ph, x: (pw - w) / 2, y: (ph - h) / 2, w, h };
+}
+const dpi = item => item.pxW / (layout(item).w / 25.4);
+
+function gridPositions(start, length, step) {
+  const out = [];
+  for (let p = start; p <= start + length + 1e-6; p += step) out.push(p);
+  return out;
+}
+
+// ---------------------------------------------------------------- export
+function buildPdf(item) {
+  const { jsPDF } = window.jspdf;
+  const { pw, ph, x, y, w, h } = layout(item);
+  const doc = new jsPDF({ orientation: pw > ph ? "landscape" : "portrait", unit: "mm", format: [pw, ph] });
+  doc.setProperties({ title: item.name });
+  const data = scaledCanvas(item.bmp, 0).toDataURL("image/jpeg", 0.95);
+  doc.addImage(data, "JPEG", x, y, w, h);
+  if (item.grid_on) {
+    doc.setGState(new doc.GState({ opacity: item.grid_opacity / 100 }));
+    doc.setDrawColor(0, 0, 0);
+    doc.setLineWidth(GRID_LINE_MM);
+    for (const gx of gridPositions(x, w, item.grid_mm)) doc.line(gx, y, gx, y + h);
+    for (const off of gridPositions(0, h, item.grid_mm)) doc.line(x, y + off, x + w, y + off);
+  }
+  return doc;
+}
+
+function download(blob, name) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+}
+
+async function exportAll() {
+  if (!items.length) { alert("Add some maps first."); return; }
+  const used = new Set(), targets = [];
+  for (const item of items) {
+    const base = `${item.size}_${item.name}`;
+    let name = base, n = 2;
+    while (used.has(name.toLowerCase())) name = `${base}_${n++}`;
+    used.add(name.toLowerCase());
+    targets.push([item, name + ".pdf"]);
+  }
+  $("exportBtn").disabled = true;
+  const prog = $("progress");
+  prog.hidden = false; prog.max = targets.length; prog.value = 0;
+  const zip = targets.length > 1 ? new JSZip() : null;
+  const errors = [];
+  let single = null;
+  for (let i = 0; i < targets.length; i++) {
+    const [item, fname] = targets[i];
+    setStatus(`Exporting ${i + 1}/${targets.length}...`);
+    await new Promise(r => setTimeout(r, 0)); // let UI repaint
+    try {
+      const blob = buildPdf(item).output("blob");
+      if (zip) zip.file(fname, blob); else single = [blob, fname];
+    } catch (e) { errors.push(`${item.name}: ${e.message || e}`); }
+    prog.value = i + 1;
+  }
+  const done = targets.length - errors.length;
+  if (zip && done) download(await zip.generateAsync({ type: "blob" }), "map_pdfs.zip");
+  else if (single) download(single[0], single[1]);
+  $("exportBtn").disabled = false;
+  prog.hidden = true;
+  setStatus(`Exported ${done} PDF(s)`);
+  if (errors.length) alert("Some exports failed:\n" + errors.join("\n"));
+}
+
+// ---------------------------------------------------------------- UI
+function setStatus(t) { $("status").textContent = t; }
+
+function paintSwitch(btn, value) {
+  btn.classList.toggle("a3", value === "A3");
+  btn.querySelector(".lbl").textContent = value;
+}
+
+function renderList() {
+  const list = $("list");
+  list.querySelectorAll(".row").forEach(r => r.remove());
+  $("empty").style.display = items.length ? "none" : "";
+  for (const item of items) {
+    const row = document.createElement("div");
+    row.className = "row" + (item === selected ? " sel" : "");
+    const img = document.createElement("img");
+    img.src = item.thumbUrl; img.alt = "";
+    const txt = document.createElement("div");
+    txt.className = "txt";
+    const nm = document.createElement("div");
+    nm.className = "nm"; nm.textContent = item.name; nm.title = item.name;
+    const dm = document.createElement("div");
+    dm.className = "dm"; dm.textContent = `${item.pxW} x ${item.pxH} px`;
+    txt.append(nm, dm);
+    const sw = document.createElement("button");
+    sw.type = "button"; sw.className = "switch";
+    sw.innerHTML = '<span class="knob"></span><span class="lbl"></span>';
+    paintSwitch(sw, item.size);
+    sw.onclick = e => {
+      e.stopPropagation();
+      item.size = item.size === "A4" ? "A3" : "A4";
+      paintSwitch(sw, item.size);
+      select(item);
+    };
+    const rm = document.createElement("button");
+    rm.type = "button"; rm.className = "rm"; rm.textContent = "✕"; rm.title = "Remove";
+    rm.onclick = e => { e.stopPropagation(); removeItem(item); };
+    row.append(img, txt, sw, rm);
+    row.onclick = () => select(item);
+    list.appendChild(row);
+  }
+}
+
+function select(item) {
+  selected = item;
+  loadGridControls(item.grid_on, item.grid_mm, item.grid_opacity);
+  renderList();
+  refresh();
+}
+
+function removeItem(item) {
+  const idx = items.indexOf(item);
+  items.splice(idx, 1);
+  if (item === selected) {
+    selected = null;
+    if (items.length) { select(items[Math.min(idx, items.length - 1)]); return; }
+  }
+  if (!items.length) loadGridControls(defaults.grid_on, defaults.grid_mm, defaults.grid_opacity);
+  setStatus(`${items.length} map(s)`);
+  renderList();
+  refresh();
+}
+
+function loadGridControls(on, mm, op) {
+  $("gridOn").checked = on;
+  $("gridMm").value = mm;
+  $("gridOpacity").value = op;
+}
+
+function onGridChange() {
+  if (selected) {
+    selected.grid_on = $("gridOn").checked;
+    selected.grid_mm = +$("gridMm").value;
+    selected.grid_opacity = +$("gridOpacity").value;
+  }
+  refresh();
+}
+
+async function addFiles(files) {
+  files = [...files].filter(f => f.type.startsWith("image/"));
+  if (!files.length) return;
+  const known = new Set(items.map(i => i.file.name + ":" + i.file.size + ":" + i.file.lastModified));
+  const failed = [];
+  for (let n = 0; n < files.length; n++) {
+    const f = files[n];
+    if (known.has(f.name + ":" + f.size + ":" + f.lastModified)) continue;
+    setStatus(`Loading ${n + 1}/${files.length}...`);
+    try { items.push(await makeItem(f)); }
+    catch (e) { failed.push(`${f.name}: ${e.message || "unreadable image"}`); }
+  }
+  setStatus(`${items.length} map(s)`);
+  if (!selected && items.length) select(items[0]); else renderList();
+  if (failed.length) alert("Some files could not be opened:\n" + failed.join("\n"));
+}
+
+// ---------------------------------------------------------------- preview
+const canvas = $("preview");
+let previewCache = null;
+
+function refresh() {
+  const mm = +$("gridMm").value;
+  $("gridMmVal").textContent = `${mm} mm squares (${(mm / 25.4).toFixed(2)} inch)`;
+  $("gridOpacityVal").textContent = `${$("gridOpacity").value} %`;
+  $("gridOn").disabled = !selected;
+  const sliderOff = !selected || !$("gridOn").checked;
+  $("gridMm").disabled = sliderOff;
+  $("gridOpacity").disabled = sliderOff;
+
+  const dpr = window.devicePixelRatio || 1;
+  const cw = canvas.clientWidth, ch = canvas.clientHeight;
+  if (canvas.width !== Math.round(cw * dpr) || canvas.height !== Math.round(ch * dpr)) {
+    canvas.width = Math.round(cw * dpr); canvas.height = Math.round(ch * dpr);
+  }
+  const g = canvas.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, cw, ch);
+
+  const item = selected;
+  if (!item) {
+    $("titleLabel").textContent = "Preview";
+    $("info").textContent = "Click a map in the list to preview it.";
+    return;
+  }
+  const { pw, ph, x, y, w, h } = layout(item);
+  const d = dpi(item);
+  const squares = item.grid_on
+    ? `   |   grid: ${Math.floor(w / item.grid_mm)} x ${Math.floor(h / item.grid_mm)} full squares` : "";
+  $("titleLabel").textContent = item.name;
+  $("info").textContent =
+    `${item.size} ${pw > ph ? "landscape" : "portrait"}   |   printed map: ${(w / 10).toFixed(1)} x ${(h / 10).toFixed(1)} cm` +
+    `   |   ${Math.round(d)} DPI${d < LOW_DPI_WARNING ? "  ⚠ low resolution, may print blurry" : ""}${squares}`;
+
+  if (cw < 20 || ch < 20) return;
+  const s = Math.min(cw / pw, (ch - 18) / ph) * 0.96; // canvas px per mm
+  const ox = (cw - pw * s) / 2, oy = (ch - 18 - ph * s) / 2;
+
+  g.fillStyle = "#000";
+  g.fillRect(ox + 4, oy + 4, pw * s, ph * s);
+  g.fillStyle = "#fff";
+  g.fillRect(ox, oy, pw * s, ph * s);
+  g.strokeStyle = "#c8c8c8";
+  g.setLineDash([3, 3]);
+  g.strokeRect(ox + MARGIN_MM * s, oy + MARGIN_MM * s, (pw - 2 * MARGIN_MM) * s, (ph - 2 * MARGIN_MM) * s);
+  g.setLineDash([]);
+
+  const mx = ox + x * s, my = oy + y * s, mw = w * s, mh = h * s;
+  g.imageSmoothingQuality = "high";
+  g.drawImage(item.bmp, mx, my, mw, mh);
+  if (item.grid_on) {
+    g.strokeStyle = `rgba(0,0,0,${item.grid_opacity / 100})`;
+    g.lineWidth = 1;
+    g.beginPath();
+    for (const gx of gridPositions(0, w, item.grid_mm)) {
+      const px = Math.round(mx + gx * s) + .5;
+      g.moveTo(px, my); g.lineTo(px, my + mh);
+    }
+    for (const gy of gridPositions(0, h, item.grid_mm)) {
+      const py = Math.round(my + gy * s) + .5;
+      g.moveTo(mx, py); g.lineTo(mx + mw, py);
+    }
+    g.stroke();
+  }
+  g.fillStyle = "#b5bac1";
+  g.font = "11px 'Segoe UI', system-ui, sans-serif";
+  g.textAlign = "center";
+  g.fillText(`${item.size} • ${pw} x ${ph} mm • dashed line = ${MARGIN_MM} mm safe margin`,
+             cw / 2, oy + ph * s + 14);
+}
+
+// ---------------------------------------------------------------- defaults panel
+function updateDefaultLabels() {
+  $("defGridMmVal").textContent = `${defaults.grid_mm} mm`;
+  $("defOpacityVal").textContent = `${defaults.grid_opacity} %`;
+}
+function onDefaultChange(changes) {
+  Object.assign(defaults, changes);
+  updateDefaultLabels();
+  saveSettings();
+  if (!selected) {
+    loadGridControls(defaults.grid_on, defaults.grid_mm, defaults.grid_opacity);
+    refresh();
+  }
+}
+
+// ---------------------------------------------------------------- wiring
+for (const id of ["gridMm", "defGridMm"]) { $(id).min = GRID_MIN; $(id).max = GRID_MAX; $(id).step = 1; }
+for (const id of ["gridOpacity", "defOpacity"]) { $(id).min = OPACITY_MIN; $(id).max = 100; $(id).step = 5; }
+$("defGridMm").value = defaults.grid_mm;
+$("defOpacity").value = defaults.grid_opacity;
+$("defGridOn").checked = defaults.grid_on;
+paintSwitch($("defSize"), defaults.size);
+updateDefaultLabels();
+loadGridControls(defaults.grid_on, defaults.grid_mm, defaults.grid_opacity);
+
+$("defSize").onclick = () => {
+  const v = defaults.size === "A4" ? "A3" : "A4";
+  paintSwitch($("defSize"), v);
+  onDefaultChange({ size: v });
+};
+$("defGridOn").onchange = e => onDefaultChange({ grid_on: e.target.checked });
+$("defGridMm").oninput = e => onDefaultChange({ grid_mm: +e.target.value });
+$("defOpacity").oninput = e => onDefaultChange({ grid_opacity: +e.target.value });
+$("defaultsToggle").onclick = () => {
+  const open = $("defaultsPanel").classList.toggle("open");
+  $("defaultsToggle").textContent = open ? "⚙ Defaults ▴" : "⚙ Defaults ▾";
+};
+
+$("gridOn").onchange = onGridChange;
+$("gridMm").oninput = onGridChange;
+$("gridOpacity").oninput = onGridChange;
+$("addBtn").onclick = () => $("file").click();
+$("file").onchange = e => { addFiles(e.target.files); e.target.value = ""; };
+$("clearBtn").onclick = () => {
+  if (items.length && confirm("Remove all maps from the list?")) {
+    items.length = 0; selected = null;
+    loadGridControls(defaults.grid_on, defaults.grid_mm, defaults.grid_opacity);
+    setStatus("0 map(s)"); renderList(); refresh();
+  }
+};
+$("exportBtn").onclick = exportAll;
+
+const list = $("list");
+["dragenter", "dragover"].forEach(t => list.addEventListener(t, e => { e.preventDefault(); list.classList.add("drag"); }));
+["dragleave", "drop"].forEach(t => list.addEventListener(t, e => { e.preventDefault(); list.classList.remove("drag"); }));
+list.addEventListener("drop", e => addFiles(e.dataTransfer.files));
+
+window.addEventListener("resize", refresh);
+refresh();
+</script>
+</body>
+</html>
